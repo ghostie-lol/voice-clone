@@ -47,16 +47,18 @@ jobs:
           python3 - <<'PY'
           p = "android/app/build.gradle.kts"
           s = open(p).read()
-          block = '''    signingConfigs {
-              create("release") {
-                  storeFile = file(System.getenv("KEYSTORE_PATH"))
-                  storePassword = System.getenv("KEYSTORE_PASSWORD")
-                  keyAlias = System.getenv("KEY_ALIAS")
-                  keyPassword = System.getenv("KEY_PASSWORD")
-              }
-          }
-
-      '''
+          block = "\n".join([
+              "    signingConfigs {",
+              '        create("release") {',
+              '            storeFile = file(System.getenv("KEYSTORE_PATH"))',
+              '            storePassword = System.getenv("KEYSTORE_PASSWORD")',
+              '            keyAlias = System.getenv("KEY_ALIAS")',
+              '            keyPassword = System.getenv("KEY_PASSWORD")',
+              "        }",
+              "    }",
+              "",
+              "",
+          ])
           s = s.replace("    buildTypes {", block + "    buildTypes {", 1)
           s = s.replace('signingConfigs.getByName("debug")', 'signingConfigs.getByName("release")')
           open(p, "w").write(s)
