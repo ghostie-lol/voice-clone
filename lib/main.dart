@@ -416,17 +416,14 @@ class _SettingsTabState extends State<SettingsTab> {
                 subtitle: const Text(
                     '1 unit = 1 second of generation. Heavy jobs count extra.'))),
         const SizedBox(height: 12),
-        // Hidden on iOS: Apple App Review may reject license-key unlocks.
-        if (!Platform.isIOS) ...[
-          TextField(
-              controller: code,
-              decoration: const InputDecoration(
-                  labelText: 'Lifetime key (VC-XXXX-XXXX-XXXX)',
-                  border: OutlineInputBorder())),
-          const SizedBox(height: 8),
-          OutlinedButton(onPressed: redeem, child: const Text('Redeem key')),
-          const Divider(height: 32),
-        ],
+        TextField(
+            controller: code,
+            decoration: const InputDecoration(
+                labelText: 'Lifetime key (VC-XXXX-XXXX-XXXX)',
+                border: OutlineInputBorder())),
+        const SizedBox(height: 8),
+        OutlinedButton(onPressed: redeem, child: const Text('Redeem key')),
+        const Divider(height: 32),
         TextField(
             controller: s,
             decoration: const InputDecoration(
