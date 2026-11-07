@@ -1,0 +1,12 @@
+build/
+.dart_tool/
+.flutter-plugins*
+.packages
+pubspec.lock
+android/
+ios/
+windows/
+Payload/
+*.ipa
+__pycache__/
+backend/data/
