@@ -1,13 +1,24 @@
-name: Build apps
+name: Build and release
 
+# Push a tag like v1.0.0 to build everything and publish the Windows build to GitHub Releases.
+# Run manually (Actions tab) to build without releasing.
 on:
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
+  # ---------------------------------------------------------------- Android
   android:
     runs-on: ubuntu-latest
+    env:
+      APP_ORG: ${{ vars.APP_ORG || 'com.example' }}
+      SERVER_URL: ${{ vars.SERVER_URL }}
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      HAS_PLAY: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -18,53 +29,176 @@ jobs:
         with:
           channel: stable
       - name: Generate platform folder
-        run: flutter create --platforms=android --project-name voice_clone --org com.example .
-      - name: Patch Android (permissions, minSdk)
+        run: flutter create --platforms=android --project-name voice_clone --org "$APP_ORG" .
+      - name: Patch Android (permissions, minSdk, server URL)
         run: |
-          sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/><uses-permission android:name="android.permission.RECORD_AUDIO"/><application android:usesCleartextTraffic="true"#' android/app/src/main/AndroidManifest.xml
+          CLEAR=' android:usesCleartextTraffic="true"'
+          if [[ "$SERVER_URL" == https://* ]]; then CLEAR=''; fi
+          sed -i "s#<application#<uses-permission android:name=\"android.permission.INTERNET\"/><uses-permission android:name=\"android.permission.RECORD_AUDIO\"/><application${CLEAR}#" android/app/src/main/AndroidManifest.xml
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle* || true
+          if [ -n "$SERVER_URL" ]; then sed -i "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
+      - name: Set up release signing
+        if: env.HAS_KEYSTORE == 'true'
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          p = "android/app/build.gradle.kts"
+          s = open(p).read()
+          block = '''    signingConfigs {
+              create("release") {
+                  storeFile = file(System.getenv("KEYSTORE_PATH"))
+                  storePassword = System.getenv("KEYSTORE_PASSWORD")
+                  keyAlias = System.getenv("KEY_ALIAS")
+                  keyPassword = System.getenv("KEY_PASSWORD")
+              }
+          }
+
+      '''
+          s = s.replace("    buildTypes {", block + "    buildTypes {", 1)
+          s = s.replace('signingConfigs.getByName("debug")', 'signingConfigs.getByName("release")')
+          open(p, "w").write(s)
+          PY
       - run: flutter pub get
-      - run: flutter build apk --release
+      - name: Build AAB (Play Store) and APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          flutter build appbundle --release --build-number=${{ github.run_number }}
+          flutter build apk --release --build-number=${{ github.run_number }}
       - uses: actions/upload-artifact@v4
         with:
-          name: VoiceClone-android-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: VoiceClone-android
+          path: |
+            build/app/outputs/bundle/release/app-release.aab
+            build/app/outputs/flutter-apk/app-release.apk
+      - name: Upload to Google Play (internal track, draft)
+        if: env.HAS_PLAY == 'true' && env.HAS_KEYSTORE == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ env.APP_ORG }}.voice_clone
+          releaseFiles: build/app/outputs/bundle/release/app-release.aab
+          track: internal
+          status: draft
+      - name: Attach APK to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/app/outputs/flutter-apk/app-release.apk
 
+  # ---------------------------------------------------------------- Windows
   windows:
     runs-on: windows-latest
+    env:
+      APP_ORG: ${{ vars.APP_ORG || 'com.example' }}
+      SERVER_URL: ${{ vars.SERVER_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
       - name: Generate platform folder
-        run: flutter create --platforms=windows --project-name voice_clone --org com.example .
+        run: flutter create --platforms=windows --project-name voice_clone --org "$env:APP_ORG" .
+      - name: Set server URL
+        shell: bash
+        run: |
+          if [ -n "$SERVER_URL" ]; then sed -i "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
       - run: flutter pub get
       - run: flutter build windows --release
+      - name: Zip
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath VoiceClone-windows.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: VoiceClone-windows-exe
-          path: build/windows/x64/runner/Release
+          name: VoiceClone-windows
+          path: VoiceClone-windows.zip
+      - name: Publish to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: VoiceClone-windows.zip
+          generate_release_notes: true
 
+  # -------------------------------------------------------------------- iOS
   ios:
     runs-on: macos-latest
+    env:
+      APP_ORG: ${{ vars.APP_ORG || 'com.example' }}
+      SERVER_URL: ${{ vars.SERVER_URL }}
+      HAS_APPLE: ${{ secrets.APPSTORE_KEY_ID != '' && secrets.APPSTORE_ISSUER_ID != '' && secrets.APPSTORE_KEY_P8 != '' && secrets.APPLE_TEAM_ID != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
       - name: Generate platform folder
-        run: flutter create --platforms=ios --project-name voice_clone --org com.example .
-      - name: Patch iOS (microphone permission)
-        run: /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Record a voice sample to clone" ios/Runner/Info.plist
-      - run: flutter pub get
-      - run: flutter build ios --release --no-codesign
-      - name: Package unsigned IPA
+        run: flutter create --platforms=ios --project-name voice_clone --org "$APP_ORG" .
+      - name: Patch iOS (permissions, server URL)
         run: |
+          /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Record a voice sample to clone" ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" ios/Runner/Info.plist
+          if [ -n "$SERVER_URL" ]; then sed -i '' "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
+      - run: flutter pub get
+
+      # No Apple secrets: unsigned IPA for sideloading
+      - name: Build unsigned IPA
+        if: env.HAS_APPLE != 'true'
+        run: |
+          flutter build ios --release --no-codesign
           mkdir Payload
           cp -r build/ios/iphoneos/Runner.app Payload/
           zip -r VoiceClone-unsigned.ipa Payload
       - uses: actions/upload-artifact@v4
+        if: env.HAS_APPLE != 'true'
         with:
-          name: VoiceClone-ios-unsigned-ipa
+          name: VoiceClone-ios-unsigned
           path: VoiceClone-unsigned.ipa
+
+      # Apple secrets present: sign, export and upload to App Store Connect (TestFlight)
+      - name: Build, sign and upload to App Store Connect
+        if: env.HAS_APPLE == 'true'
+        env:
+          KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          KEY_P8: ${{ secrets.APPSTORE_KEY_P8 }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          KEY_PATH=~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+          echo "$KEY_P8" > "$KEY_PATH"
+
+          flutter build ios --config-only --release --no-codesign --build-number=${{ github.run_number }}
+          (cd ios && pod install)
+
+          AUTH="-allowProvisioningUpdates -authenticationKeyPath $KEY_PATH -authenticationKeyID $KEY_ID -authenticationKeyIssuerID $ISSUER_ID"
+
+          xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            $AUTH DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic archive
+
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>destination</key><string>export</string>
+          </dict></plist>
+          EOF
+
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Runner.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" $AUTH
+
+          IPA=$(ls "$RUNNER_TEMP"/export/*.ipa | head -n 1)
+          cp "$IPA" VoiceClone-appstore.ipa
+          xcrun altool --upload-app -f VoiceClone-appstore.ipa --type ios --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
+      - uses: actions/upload-artifact@v4
+        if: env.HAS_APPLE == 'true'
+        with:
+          name: VoiceClone-ios-appstore
+          path: VoiceClone-appstore.ipa
