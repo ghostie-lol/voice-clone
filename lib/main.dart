@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:file_picker/file_picker.dart';
@@ -40,7 +41,9 @@ class _HomeState extends State<Home> {
   int tab = 0;
   String server = 'http://10.0.2.2:8000';
   String apiKey = '';
+  String deviceId = '';
   List<Voice> voices = [];
+  Map<String, dynamic>? status;
 
   @override
   void initState() {
@@ -52,24 +55,41 @@ class _HomeState extends State<Home> {
     final p = await SharedPreferences.getInstance();
     server = p.getString('server') ?? server;
     apiKey = p.getString('key') ?? '';
+    var id = p.getString('device');
+    if (id == null) {
+      final r = Random.secure();
+      id = List.generate(24, (_) => r.nextInt(16).toRadixString(16)).join();
+      await p.setString('device', id);
+    }
+    deviceId = id;
     await refresh();
   }
 
-  Map<String, String> get headers => {if (apiKey.isNotEmpty) 'X-API-Key': apiKey};
-  Uri url(String path) => Uri.parse('${server.replaceAll(RegExp(r'/+$'), '')}$path');
+  Map<String, String> get headers => {
+        'X-Device-Id': deviceId,
+        if (apiKey.isNotEmpty) 'X-API-Key': apiKey,
+      };
+  Uri url(String path) =>
+      Uri.parse('${server.replaceAll(RegExp(r'/+$'), '')}$path');
 
-  void toast(String m) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  void toast(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
 
   Future<void> refresh() async {
     try {
       final r = await http.get(url('/voices'), headers: headers);
       if (r.statusCode == 200) {
         final list = jsonDecode(r.body) as List;
-        setState(() => voices =
-            list.map((e) => Voice(e['id'], e['name'])).toList());
+        setState(() =>
+            voices = list.map((e) => Voice(e['id'], e['name'])).toList());
       } else {
         toast('Server error ${r.statusCode}');
+      }
+      final s = await http.get(url('/status'), headers: headers);
+      if (s.statusCode == 200) {
+        setState(() => status = jsonDecode(s.body));
       }
     } catch (e) {
       toast('Cannot reach server. Check Settings.');
@@ -196,7 +216,8 @@ class _CloneTabState extends State<CloneTab> {
           if (samplePath != null)
             Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text('Sample: ${samplePath!.split(RegExp(r'[\\/]')).last}')),
+                child: Text(
+                    'Sample: ${samplePath!.split(RegExp(r'[\\/]')).last}')),
           CheckboxListTile(
             value: consent,
             onChanged: (v) => setState(() => consent = v ?? false),
@@ -237,8 +258,8 @@ class _SpeakTabState extends State<SpeakTab> {
   static const langs = {
     'English': 'en', 'Spanish': 'es', 'French': 'fr', 'German': 'de',
     'Italian': 'it', 'Portuguese': 'pt', 'Polish': 'pl', 'Turkish': 'tr',
-    'Russian': 'ru', 'Dutch': 'nl', 'Czech': 'cs', 'Arabic': 'ar',
-    'Chinese': 'zh-cn', 'Japanese': 'ja', 'Hungarian': 'hu', 'Korean': 'ko',
+    'Russian': 'ru', 'Dutch': 'nl', 'Arabic': 'ar', 'Chinese': 'zh',
+    'Japanese': 'ja', 'Korean': 'ko', 'Hindi': 'hi', 'Swedish': 'sv',
   };
   final textCtl = TextEditingController();
   final player = AudioPlayer();
@@ -266,6 +287,7 @@ class _SpeakTabState extends State<SpeakTab> {
         await f.writeAsBytes(res.bodyBytes);
         setState(() => outPath = f.path);
         await player.play(DeviceFileSource(f.path));
+        h.refresh();
       } else {
         h.toast(jsonDecode(res.body)['detail']?.toString() ?? 'Failed');
       }
@@ -280,8 +302,8 @@ class _SpeakTabState extends State<SpeakTab> {
     if (Platform.isAndroid || Platform.isIOS) {
       await Share.shareXFiles([XFile(outPath!)]);
     } else {
-      final dest = await FilePicker.platform.saveFile(
-          fileName: 'speech.wav', type: FileType.audio);
+      final dest = await FilePicker.platform
+          .saveFile(fileName: 'speech.wav', type: FileType.audio);
       if (dest != null) {
         await File(outPath!).copy(dest);
         widget.home.toast('Saved');
@@ -355,36 +377,81 @@ class SettingsTab extends StatefulWidget {
 class _SettingsTabState extends State<SettingsTab> {
   late final s = TextEditingController(text: widget.home.server);
   late final k = TextEditingController(text: widget.home.apiKey);
+  final code = TextEditingController();
+
+  Future<void> redeem() async {
+    final h = widget.home;
+    try {
+      final res = await http.post(h.url('/redeem'),
+          headers: {...h.headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({'code': code.text.trim()}));
+      if (res.statusCode == 200) {
+        code.clear();
+        h.toast('Unlimited access unlocked');
+        await h.refresh();
+      } else {
+        h.toast(jsonDecode(res.body)['detail']?.toString() ?? 'Failed');
+      }
+    } catch (e) {
+      h.toast('Could not redeem: $e');
+    }
+  }
 
   @override
-  Widget build(BuildContext context) => ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
+  Widget build(BuildContext context) {
+    final st = widget.home.status;
+    String usage = 'Usage unavailable';
+    if (st != null) {
+      usage = st['unlimited'] == true
+          ? 'Unlimited access'
+          : 'Used ${st['used']} of ${st['allowance']} free units this month';
+    }
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Card(
+            child: ListTile(
+                leading: const Icon(Icons.bolt),
+                title: Text(usage),
+                subtitle: const Text(
+                    '1 unit = 1 second of generation. Heavy jobs count extra.'))),
+        const SizedBox(height: 12),
+        // Hidden on iOS: Apple App Review may reject license-key unlocks.
+        if (!Platform.isIOS) ...[
           TextField(
-              controller: s,
+              controller: code,
               decoration: const InputDecoration(
-                  labelText: 'Server URL (e.g. http://192.168.1.20:8000)',
+                  labelText: 'Lifetime key (VC-XXXX-XXXX-XXXX)',
                   border: OutlineInputBorder())),
-          const SizedBox(height: 12),
-          TextField(
-              controller: k,
-              obscureText: true,
-              decoration: const InputDecoration(
-                  labelText: 'API key (optional)',
-                  border: OutlineInputBorder())),
-          const SizedBox(height: 12),
-          FilledButton(
-            onPressed: () async {
-              final p = await SharedPreferences.getInstance();
-              await p.setString('server', s.text.trim());
-              await p.setString('key', k.text.trim());
-              widget.home.server = s.text.trim();
-              widget.home.apiKey = k.text.trim();
-              await widget.home.refresh();
-              widget.home.toast('Saved');
-            },
-            child: const Text('Save & connect'),
-          ),
+          const SizedBox(height: 8),
+          OutlinedButton(onPressed: redeem, child: const Text('Redeem key')),
+          const Divider(height: 32),
         ],
-      );
+        TextField(
+            controller: s,
+            decoration: const InputDecoration(
+                labelText: 'Server URL (e.g. https://api.example.com)',
+                border: OutlineInputBorder())),
+        const SizedBox(height: 12),
+        TextField(
+            controller: k,
+            obscureText: true,
+            decoration: const InputDecoration(
+                labelText: 'API key (optional)', border: OutlineInputBorder())),
+        const SizedBox(height: 12),
+        FilledButton(
+          onPressed: () async {
+            final p = await SharedPreferences.getInstance();
+            await p.setString('server', s.text.trim());
+            await p.setString('key', k.text.trim());
+            widget.home.server = s.text.trim();
+            widget.home.apiKey = k.text.trim();
+            await widget.home.refresh();
+            widget.home.toast('Saved');
+          },
+          child: const Text('Save & connect'),
+        ),
+      ],
+    );
+  }
 }
