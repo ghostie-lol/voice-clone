@@ -72,7 +72,7 @@ jobs:
 
   # ---------------------------------------------------------------- Android
   android:
-    needs: windows
+    needs: shared
     runs-on: ubuntu-latest
     env:
       APP_ORG: ${{ vars.APP_ORG }}
@@ -144,16 +144,6 @@ jobs:
           set -e
           echo "EXIT CODE: $code"
           if [[ "$code" -ne 0 ]]; then exit "$code"; fi
-      - name: Analyze Dart
-        shell: bash
-        run: |
-          set -euo pipefail
-          set +e
-          flutter analyze
-          code=$?
-          set -e
-          echo "EXIT CODE: $code"
-          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
       - name: Build APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -212,16 +202,6 @@ jobs:
           set -e
           echo "EXIT CODE: $code"
           if [[ "$code" -ne 0 ]]; then exit "$code"; fi
-      - name: Analyze Dart
-        shell: bash
-        run: |
-          set -euo pipefail
-          set +e
-          flutter analyze
-          code=$?
-          set -e
-          echo "EXIT CODE: $code"
-          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
       - name: Build Windows release
         shell: pwsh
         run: |
@@ -249,7 +229,7 @@ jobs:
 
   # -------------------------------------------------------------------- iOS
   ios:
-    needs: android
+    needs: shared
     runs-on: macos-latest
     env:
       APP_ORG: ${{ vars.APP_ORG }}
@@ -279,16 +259,6 @@ jobs:
           set -euo pipefail
           set +e
           flutter pub get --enforce-lockfile
-          code=$?
-          set -e
-          echo "EXIT CODE: $code"
-          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
-      - name: Analyze Dart
-        shell: bash
-        run: |
-          set -euo pipefail
-          set +e
-          flutter analyze
           code=$?
           set -e
           echo "EXIT CODE: $code"
