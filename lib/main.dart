@@ -300,7 +300,7 @@ class _SpeakTabState extends State<SpeakTab> {
   Future<void> save() async {
     if (outPath == null) return;
     if (Platform.isAndroid || Platform.isIOS) {
-      await Share.shareXFiles([XFile(outPath!)]);
+      await SharePlus.instance.share(ShareParams(files: [XFile(outPath!)]));
     } else {
       final dest = await FilePicker.platform
           .saveFile(fileName: 'speech.wav', type: FileType.audio);
