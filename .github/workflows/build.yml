@@ -326,11 +326,26 @@ jobs:
               print(f"Disabled code signing in {count} configurations: {project}")
           PY
           if [ -n "$SERVER_URL" ]; then sed -i '' "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
-      - name: Build unsigned IPA
+      - name: Build unsigned iOS app and package IPA
+        shell: bash
         run: |
-          set -o pipefail
-          flutter build ipa --release --no-codesign --build-number=${{ github.run_number }} 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
-          cp build/ios/ipa/*.ipa VoiceClone-ios-unsigned.ipa
+          set -euo pipefail
+          set +e
+          flutter build ios --release --no-codesign --build-number=${{ github.run_number }} -v 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
+          build_code=${PIPESTATUS[0]}
+          set -e
+          echo "EXIT CODE: $build_code"
+          if [[ "$build_code" -ne 0 ]]; then exit "$build_code"; fi
+
+          test -d build/ios/iphoneos/Runner.app || {
+            echo "::error::build/ios/iphoneos/Runner.app was not produced"
+            exit 1
+          }
+          rm -rf Payload VoiceClone-ios-unsigned.ipa
+          mkdir Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          /usr/bin/zip -r VoiceClone-ios-unsigned.ipa Payload
+          test -s VoiceClone-ios-unsigned.ipa
       - name: Upload iOS build log
         if: always()
         uses: actions/upload-artifact@v4
