@@ -34,8 +34,12 @@ jobs:
         run: |
           set -euo pipefail
           grep -n "file_picker" pubspec.yaml pubspec.lock
+          search_paths=(lib/)
+          if [[ -d test ]]; then
+            search_paths+=(test/)
+          fi
           set +e
-          grep -rn "FilePicker.platform" lib/ test/
+          grep -rn "FilePicker.platform" "${search_paths[@]}"
           grep_code=$?
           set -e
           if [[ "$grep_code" -eq 0 ]]; then
@@ -183,7 +187,12 @@ jobs:
             exit 1
           fi
       - name: Generate platform folder
-        run: flutter create --platforms=windows --project-name voice_clone --org "$env:APP_ORG" .
+        shell: pwsh
+        run: |
+          flutter create --platforms=windows --project-name voice_clone --org "$env:APP_ORG" .
+          $code = $LASTEXITCODE
+          Write-Host "EXIT CODE: $code"
+          if ($code -ne 0) { exit $code }
       - name: Set server URL
         shell: bash
         run: |
@@ -213,9 +222,26 @@ jobs:
           set -e
           echo "EXIT CODE: $code"
           if [[ "$code" -ne 0 ]]; then exit "$code"; fi
-      - run: flutter build windows --release
-      - name: Zip
-        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath VoiceClone-windows.zip
+      - name: Build Windows release
+        shell: pwsh
+        run: |
+          flutter build windows --release
+          $code = $LASTEXITCODE
+          Write-Host "EXIT CODE: $code"
+          if ($code -ne 0) { exit $code }
+      - name: Verify executable and zip release
+        shell: pwsh
+        run: |
+          $exe = "build/windows/x64/runner/Release/voice_clone.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            Write-Error "Expected Windows executable was not produced: $exe"
+            exit 1
+          }
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "VoiceClone-windows.zip" -Force
+          if (-not (Test-Path -LiteralPath "VoiceClone-windows.zip" -PathType Leaf)) {
+            Write-Error "Windows archive was not produced"
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: VoiceClone-windows
