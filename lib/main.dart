@@ -133,9 +133,9 @@ class _CloneTabState extends State<CloneTab> {
   bool recording = false, consent = false, busy = false;
 
   Future<void> pick() async {
-    final r = await FilePicker.platform.pickFiles(type: FileType.audio);
-    if (r?.files.single.path != null) {
-      setState(() => samplePath = r!.files.single.path);
+    final picked = await FilePicker.pickFile(type: FileType.audio);
+    if (picked?.path != null) {
+      setState(() => samplePath = picked!.path);
     }
   }
 
@@ -302,10 +302,11 @@ class _SpeakTabState extends State<SpeakTab> {
     if (Platform.isAndroid || Platform.isIOS) {
       await SharePlus.instance.share(ShareParams(files: [XFile(outPath!)]));
     } else {
-      final dest = await FilePicker.platform
-          .saveFile(fileName: 'speech.wav', type: FileType.audio);
-      if (dest != null) {
-        await File(outPath!).copy(dest);
+      final saved = await FilePicker.saveFile(
+        fileName: 'speech.wav',
+        bytes: await File(outPath!).readAsBytes(),
+      );
+      if (saved != null) {
         widget.home.toast('Saved');
       }
     }
