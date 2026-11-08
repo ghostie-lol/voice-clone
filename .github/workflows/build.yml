@@ -161,12 +161,12 @@ jobs:
           project = Path("ios/Runner.xcodeproj/project.pbxproj")
           contents = project.read_text()
           settings = (
-              "\\t\\t\\t\\tCODE_SIGNING_ALLOWED = NO;\\n"
-              "\\t\\t\\t\\tCODE_SIGNING_REQUIRED = NO;\\n"
-              '\\t\\t\\t\\tCODE_SIGN_IDENTITY = "";\\n'
-              '\\t\\t\\t\\tDEVELOPMENT_TEAM = "";\\n'
+              "\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n"
+              "\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n"
+              '\t\t\t\tCODE_SIGN_IDENTITY = "";\n'
+              '\t\t\t\tDEVELOPMENT_TEAM = "";\n'
           )
-          contents, count = re.subn(r"(buildSettings = \\{\\n)", lambda match: match.group(1) + settings, contents)
+          contents, count = re.subn(r"(buildSettings = \{\n)", lambda match: match.group(1) + settings, contents)
           if count == 0:
               raise SystemExit("Could not find Xcode build settings to disable signing")
           project.write_text(contents)
