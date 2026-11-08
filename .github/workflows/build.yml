@@ -331,19 +331,20 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          flutter build ios --release --no-codesign --build-number=${{ github.run_number }} -v 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
+          flutter build ipa --release --no-codesign --build-number=${{ github.run_number }} -v 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
           build_code=${PIPESTATUS[0]}
           set -e
           echo "EXIT CODE: $build_code"
           if [[ "$build_code" -ne 0 ]]; then exit "$build_code"; fi
 
-          test -d build/ios/iphoneos/Runner.app || {
-            echo "::error::build/ios/iphoneos/Runner.app was not produced"
+          app="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+          test -d "$app" || {
+            echo "::error::Unsigned Runner.app was not found inside the Xcode archive"
             exit 1
           }
           rm -rf Payload VoiceClone-ios-unsigned.ipa
           mkdir Payload
-          cp -R build/ios/iphoneos/Runner.app Payload/
+          cp -R "$app" Payload/
           /usr/bin/zip -r VoiceClone-ios-unsigned.ipa Payload
           test -s VoiceClone-ios-unsigned.ipa
       - name: Upload iOS build log
