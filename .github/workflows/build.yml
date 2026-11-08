@@ -71,6 +71,11 @@ jobs:
           PY
       - name: Upgrade affected plugins
         run: flutter pub upgrade record share_plus
+      - name: Upload resolved dependency lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceClone-pubspec-lock
+          path: pubspec.lock
       - name: Build APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -151,30 +156,41 @@ jobs:
           fi
       - name: Generate platform folder
         run: flutter create --platforms=ios --project-name voice_clone --org "$APP_ORG" .
-      - name: Patch iOS (permissions, server URL)
+      - name: Upgrade affected plugins
+        run: flutter pub upgrade record share_plus
+      - name: Patch iOS (permissions, unsigned signing, server URL)
         run: |
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Record a voice sample to clone" ios/Runner/Info.plist
+          cd ios && pod install && cd ..
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          project = Path("ios/Runner.xcodeproj/project.pbxproj")
-          contents = project.read_text()
+          projects = [
+              Path("ios/Runner.xcodeproj/project.pbxproj"),
+              Path("ios/Pods/Pods.xcodeproj/project.pbxproj"),
+          ]
           settings = (
               "\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n"
               "\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n"
               '\t\t\t\tCODE_SIGN_IDENTITY = "";\n'
               '\t\t\t\tDEVELOPMENT_TEAM = "";\n'
           )
-          contents, count = re.subn(r"(buildSettings = \{\n)", lambda match: match.group(1) + settings, contents)
-          if count == 0:
-              raise SystemExit("Could not find Xcode build settings to disable signing")
-          project.write_text(contents)
-          print(f"Disabled code signing in {count} generated Xcode build configurations")
+          for project in projects:
+              if not project.exists():
+                  continue
+              contents = project.read_text()
+              contents, count = re.subn(
+                  r"(buildSettings = \{\n)",
+                  lambda match: match.group(1) + settings,
+                  contents,
+              )
+              if count == 0:
+                  raise SystemExit(f"Could not find Xcode build settings in {project}")
+              project.write_text(contents)
+              print(f"Disabled code signing in {count} configurations: {project}")
           PY
           if [ -n "$SERVER_URL" ]; then sed -i '' "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
-      - name: Upgrade affected plugins
-        run: flutter pub upgrade record share_plus
       - name: Build unsigned IPA
         run: |
           set -o pipefail
