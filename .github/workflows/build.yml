@@ -15,7 +15,7 @@ jobs:
   android:
     runs-on: ubuntu-latest
     env:
-      APP_ORG: ${{ vars.APP_ORG || 'com.example' }}
+      APP_ORG: ${{ vars.APP_ORG }}
       SERVER_URL: ${{ vars.SERVER_URL }}
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
@@ -26,7 +26,14 @@ jobs:
           java-version: "17"
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.47.9'
+      - name: Validate app identifier
+        shell: bash
+        run: |
+          if [[ -z "$APP_ORG" || "$APP_ORG" == "com.example" ]]; then
+            echo "::error::Set the APP_ORG repository variable to your reverse-domain app ID (for example, com.yourname.voiceclone)."
+            exit 1
+          fi
       - name: Generate platform folder
         run: flutter create --platforms=android --project-name voice_clone --org "$APP_ORG" .
       - name: Patch Android (permissions, minSdk, server URL)
@@ -62,7 +69,8 @@ jobs:
           s = s.replace('signingConfigs.getByName("debug")', 'signingConfigs.getByName("release")')
           open(p, "w").write(s)
           PY
-      - run: flutter pub get
+      - name: Upgrade affected plugins
+        run: flutter pub upgrade record share_plus
       - name: Build APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -86,20 +94,28 @@ jobs:
   windows:
     runs-on: windows-latest
     env:
-      APP_ORG: ${{ vars.APP_ORG || 'com.example' }}
+      APP_ORG: ${{ vars.APP_ORG }}
       SERVER_URL: ${{ vars.SERVER_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.47.9'
+      - name: Validate app identifier
+        shell: bash
+        run: |
+          if [[ -z "$APP_ORG" || "$APP_ORG" == "com.example" ]]; then
+            echo "::error::Set the APP_ORG repository variable to your reverse-domain app ID (for example, com.yourname.voiceclone)."
+            exit 1
+          fi
       - name: Generate platform folder
         run: flutter create --platforms=windows --project-name voice_clone --org "$env:APP_ORG" .
       - name: Set server URL
         shell: bash
         run: |
           if [ -n "$SERVER_URL" ]; then sed -i "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
-      - run: flutter pub get
+      - name: Upgrade affected plugins
+        run: flutter pub upgrade record share_plus
       - run: flutter build windows --release
       - name: Zip
         run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath VoiceClone-windows.zip
@@ -119,26 +135,58 @@ jobs:
   ios:
     runs-on: macos-latest
     env:
-      APP_ORG: ${{ vars.APP_ORG || 'com.example' }}
+      APP_ORG: ${{ vars.APP_ORG }}
       SERVER_URL: ${{ vars.SERVER_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.47.9'
+      - name: Validate app identifier
+        shell: bash
+        run: |
+          if [[ -z "$APP_ORG" || "$APP_ORG" == "com.example" ]]; then
+            echo "::error::Set the APP_ORG repository variable to your reverse-domain app ID (for example, com.yourname.voiceclone)."
+            exit 1
+          fi
       - name: Generate platform folder
         run: flutter create --platforms=ios --project-name voice_clone --org "$APP_ORG" .
       - name: Patch iOS (permissions, server URL)
         run: |
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Record a voice sample to clone" ios/Runner/Info.plist
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          project = Path("ios/Runner.xcodeproj/project.pbxproj")
+          contents = project.read_text()
+          settings = (
+              "\\t\\t\\t\\tCODE_SIGNING_ALLOWED = NO;\\n"
+              "\\t\\t\\t\\tCODE_SIGNING_REQUIRED = NO;\\n"
+              '\\t\\t\\t\\tCODE_SIGN_IDENTITY = "";\\n'
+              '\\t\\t\\t\\tDEVELOPMENT_TEAM = "";\\n'
+          )
+          contents, count = re.subn(r"(buildSettings = \\{\\n)", lambda match: match.group(1) + settings, contents)
+          if count == 0:
+              raise SystemExit("Could not find Xcode build settings to disable signing")
+          project.write_text(contents)
+          print(f"Disabled code signing in {count} generated Xcode build configurations")
+          PY
           if [ -n "$SERVER_URL" ]; then sed -i '' "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
-      - run: flutter pub get
+      - name: Upgrade affected plugins
+        run: flutter pub upgrade record share_plus
       - name: Build unsigned IPA
         run: |
-          flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
-          mkdir Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -r VoiceClone-ios-unsigned.ipa Payload
+          set -o pipefail
+          flutter build ipa --release --no-codesign --build-number=${{ github.run_number }} 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
+          cp build/ios/ipa/*.ipa VoiceClone-ios-unsigned.ipa
+      - name: Upload iOS build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceClone-ios-build-log
+          path: ${{ runner.temp }}/ios-build.log
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: VoiceClone-ios-unsigned
