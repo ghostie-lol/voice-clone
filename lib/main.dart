@@ -133,9 +133,9 @@ class _CloneTabState extends State<CloneTab> {
   bool recording = false, consent = false, busy = false;
 
   Future<void> pick() async {
-    final picked = await FilePicker.pickFile(type: FileType.audio);
-    if (picked?.path != null) {
-      setState(() => samplePath = picked!.path);
+    final picked = await FilePicker.pickFiles(type: FileType.audio);
+    if (picked.isNotEmpty && picked.first.path != null) {
+      setState(() => samplePath = picked.first.path);
     }
   }
 
