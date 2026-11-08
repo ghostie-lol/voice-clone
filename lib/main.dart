@@ -317,7 +317,7 @@ class _SpeakTabState extends State<SpeakTab> {
     final vs = widget.home.voices;
     return ListView(padding: const EdgeInsets.all(16), children: [
       DropdownButtonFormField<String>(
-        value: vs.any((v) => v.id == voiceId) ? voiceId : null,
+        initialValue: vs.any((v) => v.id == voiceId) ? voiceId : null,
         decoration: const InputDecoration(
             labelText: 'Voice', border: OutlineInputBorder()),
         items: [
@@ -327,7 +327,7 @@ class _SpeakTabState extends State<SpeakTab> {
       ),
       const SizedBox(height: 12),
       DropdownButtonFormField<String>(
-        value: lang,
+        initialValue: lang,
         decoration: const InputDecoration(
             labelText: 'Language', border: OutlineInputBorder()),
         items: [
