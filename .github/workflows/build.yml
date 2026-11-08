@@ -10,8 +10,65 @@ permissions:
   contents: write
 
 jobs:
+  # --------------------------------------------------------------- Shared
+  shared:
+    name: Shared dependency and Dart checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+      - name: Resolve dependencies and generate lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter pub get
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
+      - name: Verify file picker migration and inspect plugin versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -n "file_picker" pubspec.yaml pubspec.lock
+          set +e
+          grep -rn "FilePicker.platform" lib/ test/
+          grep_code=$?
+          set -e
+          if [[ "$grep_code" -eq 0 ]]; then
+            echo "Legacy FilePicker.platform references remain"
+            exit 1
+          elif [[ "$grep_code" -ne 1 ]]; then
+            echo "grep EXIT CODE: $grep_code"
+            exit "$grep_code"
+          fi
+          echo "Legacy FilePicker.platform search: no matches (grep exit 1; validation exit 0)"
+          echo "Record and SharePlus call sites:"
+          grep -rnE "AudioRecorder|RecordConfig|SharePlus|ShareParams" lib/
+      - name: Analyze Dart
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter analyze
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
+      - name: Upload resolved lockfile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceClone-pubspec-lock
+          path: pubspec.lock
+          if-no-files-found: ignore
+
   # ---------------------------------------------------------------- Android
   android:
+    needs: windows
     runs-on: ubuntu-latest
     env:
       APP_ORG: ${{ vars.APP_ORG }}
@@ -40,7 +97,7 @@ jobs:
           CLEAR=' android:usesCleartextTraffic="true"'
           if [[ "$SERVER_URL" == https://* ]]; then CLEAR=''; fi
           sed -i "s#<application#<uses-permission android:name=\"android.permission.INTERNET\"/><uses-permission android:name=\"android.permission.RECORD_AUDIO\"/><application${CLEAR}#" android/app/src/main/AndroidManifest.xml
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle* || true
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle*
           if [ -n "$SERVER_URL" ]; then sed -i "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
       - name: Set up release signing (keeps the same signature across updates)
         if: env.HAS_KEYSTORE == 'true'
@@ -68,13 +125,31 @@ jobs:
           s = s.replace('signingConfigs.getByName("debug")', 'signingConfigs.getByName("release")')
           open(p, "w").write(s)
           PY
-      - name: Upgrade affected plugins
-        run: flutter pub upgrade record share_plus
-      - name: Upload resolved dependency lockfile
-        uses: actions/upload-artifact@v4
+      - name: Download shared lockfile
+        uses: actions/download-artifact@v4
         with:
           name: VoiceClone-pubspec-lock
-          path: pubspec.lock
+          path: .
+      - name: Verify locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter pub get --enforce-lockfile
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
+      - name: Analyze Dart
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter analyze
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
       - name: Build APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -90,6 +165,7 @@ jobs:
 
   # ---------------------------------------------------------------- Windows
   windows:
+    needs: shared
     runs-on: windows-latest
     env:
       APP_ORG: ${{ vars.APP_ORG }}
@@ -112,8 +188,31 @@ jobs:
         shell: bash
         run: |
           if [ -n "$SERVER_URL" ]; then sed -i "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
-      - name: Upgrade affected plugins
-        run: flutter pub upgrade record share_plus
+      - name: Download shared lockfile
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-pubspec-lock
+          path: .
+      - name: Verify locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter pub get --enforce-lockfile
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
+      - name: Analyze Dart
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter analyze
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
       - run: flutter build windows --release
       - name: Zip
         run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath VoiceClone-windows.zip
@@ -124,6 +223,7 @@ jobs:
 
   # -------------------------------------------------------------------- iOS
   ios:
+    needs: android
     runs-on: macos-latest
     env:
       APP_ORG: ${{ vars.APP_ORG }}
@@ -142,8 +242,31 @@ jobs:
           fi
       - name: Generate platform folder
         run: flutter create --platforms=ios --project-name voice_clone --org "$APP_ORG" .
-      - name: Upgrade affected plugins
-        run: flutter pub upgrade record share_plus
+      - name: Download shared lockfile
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-pubspec-lock
+          path: .
+      - name: Verify locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter pub get --enforce-lockfile
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
+      - name: Analyze Dart
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter analyze
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
       - name: Patch iOS (permissions, unsigned signing, server URL)
         run: |
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Record a voice sample to clone" ios/Runner/Info.plist
