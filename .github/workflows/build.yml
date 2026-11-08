@@ -1,10 +1,8 @@
 name: Build and release
 
-# Push a tag like v1.0.0 to build everything and publish APK, EXE and IPA to GitHub Releases.
-# Run manually (Actions tab) to build without releasing.
 on:
   push:
-    tags: ["v*"]
+    branches: ["main"]
   pull_request:
   workflow_dispatch:
 
@@ -89,12 +87,6 @@ jobs:
         with:
           name: VoiceClone-android
           path: VoiceClone-android.apk
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: VoiceClone-android.apk
-          generate_release_notes: true
 
   # ---------------------------------------------------------------- Windows
   windows:
@@ -129,15 +121,8 @@ jobs:
         with:
           name: VoiceClone-windows
           path: VoiceClone-windows.zip
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: VoiceClone-windows.zip
-          generate_release_notes: true
 
   # -------------------------------------------------------------------- iOS
-  # Unsigned IPA. Users install it with AltStore or Sideloadly using a free Apple ID.
   ios:
     runs-on: macos-latest
     env:
@@ -208,9 +193,39 @@ jobs:
         with:
           name: VoiceClone-ios-unsigned
           path: VoiceClone-ios-unsigned.ipa
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+
+  # --------------------------------------------------------------- Release
+  release:
+    name: Publish successful platform builds
+    runs-on: ubuntu-latest
+    needs: [android, windows, ios]
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Download Android artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-android
+          path: release-files
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-windows
+          path: release-files
+      - name: Download unsigned iOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-ios-unsigned
+          path: release-files
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: VoiceClone-ios-unsigned.ipa
+          tag_name: build-${{ github.run_number }}
+          name: VoiceClone build #${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-files/VoiceClone-android.apk
+            release-files/VoiceClone-windows.zip
+            release-files/VoiceClone-ios-unsigned.ipa
