@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.2
-  file_picker: ^8.1.2
+  file_picker: ^13.3.2
   record: ^7.1.2
   audioplayers: ^6.1.0
   path_provider: ^2.1.5
