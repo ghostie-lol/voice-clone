@@ -55,8 +55,10 @@ Push a tag (`git tag v1.0.0 && git push --tags`) or run **Build and release** fr
 | `VoiceClone-ios-unsigned.ipa` | Install with AltStore or Sideloadly using a free Apple ID (re-sign every 7 days) |
 
 **Repository variables** (Settings > Secrets and variables > Actions > Variables):
-- `APP_ORG`: any reverse-domain id, e.g. `com.yourname`
+- `APP_ORG`: required reverse-domain application identifier, e.g. `com.yourname.voiceclone`. Do not leave it as `com.example`; all three platform builds stop with a clear error until this is set.
 - `SERVER_URL`: your server URL, baked into the apps as the default
+
+The workflow pins Flutter to `3.47.9` and upgrades the `record` and `share_plus` dependency trees during each build. Commit the generated `pubspec.lock` after running `flutter pub upgrade record share_plus` locally so future builds use a fixed dependency resolution.
 
 **Android signing (recommended).** Without it, every build gets a different debug signature and users must uninstall before updating. Make one keystore, once, and add it as secrets:
 

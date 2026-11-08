@@ -1,21 +1,81 @@
 name: Build and release
 
-# Push a tag like v1.0.0 to build everything and publish APK, EXE and IPA to GitHub Releases.
-# Run manually (Actions tab) to build without releasing.
 on:
   push:
-    tags: ["v*"]
+    branches: ["main"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  # --------------------------------------------------------------- Shared
+  shared:
+    name: Shared dependency and Dart checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+      - name: Resolve dependencies and generate lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter pub get
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
+      - name: Verify file picker migration and inspect plugin versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -n "file_picker" pubspec.yaml pubspec.lock
+          search_paths=(lib/)
+          if [[ -d test ]]; then
+            search_paths+=(test/)
+          fi
+          set +e
+          grep -rn "FilePicker.platform" "${search_paths[@]}"
+          grep_code=$?
+          set -e
+          if [[ "$grep_code" -eq 0 ]]; then
+            echo "Legacy FilePicker.platform references remain"
+            exit 1
+          elif [[ "$grep_code" -ne 1 ]]; then
+            echo "grep EXIT CODE: $grep_code"
+            exit "$grep_code"
+          fi
+          echo "Legacy FilePicker.platform search: no matches (grep exit 1; validation exit 0)"
+          echo "Record and SharePlus call sites:"
+          grep -rnE "AudioRecorder|RecordConfig|SharePlus|ShareParams" lib/
+      - name: Analyze Dart
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter analyze
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
+      - name: Upload resolved lockfile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceClone-pubspec-lock
+          path: pubspec.lock
+          if-no-files-found: ignore
+
   # ---------------------------------------------------------------- Android
   android:
+    needs: shared
     runs-on: ubuntu-latest
     env:
-      APP_ORG: ${{ vars.APP_ORG || 'com.example' }}
+      APP_ORG: ${{ vars.APP_ORG }}
       SERVER_URL: ${{ vars.SERVER_URL }}
       HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
@@ -26,7 +86,14 @@ jobs:
           java-version: "17"
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.47.9'
+      - name: Validate app identifier
+        shell: bash
+        run: |
+          if [[ -z "$APP_ORG" || "$APP_ORG" == "com.example" ]]; then
+            echo "::error::Set the APP_ORG repository variable to your reverse-domain app ID (for example, com.yourname.voiceclone)."
+            exit 1
+          fi
       - name: Generate platform folder
         run: flutter create --platforms=android --project-name voice_clone --org "$APP_ORG" .
       - name: Patch Android (permissions, minSdk, server URL)
@@ -34,7 +101,7 @@ jobs:
           CLEAR=' android:usesCleartextTraffic="true"'
           if [[ "$SERVER_URL" == https://* ]]; then CLEAR=''; fi
           sed -i "s#<application#<uses-permission android:name=\"android.permission.INTERNET\"/><uses-permission android:name=\"android.permission.RECORD_AUDIO\"/><application${CLEAR}#" android/app/src/main/AndroidManifest.xml
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle* || true
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/; s/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/' android/app/build.gradle*
           if [ -n "$SERVER_URL" ]; then sed -i "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
       - name: Set up release signing (keeps the same signature across updates)
         if: env.HAS_KEYSTORE == 'true'
@@ -62,7 +129,21 @@ jobs:
           s = s.replace('signingConfigs.getByName("debug")', 'signingConfigs.getByName("release")')
           open(p, "w").write(s)
           PY
-      - run: flutter pub get
+      - name: Download shared lockfile
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-pubspec-lock
+          path: .
+      - name: Verify locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter pub get --enforce-lockfile
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
       - name: Build APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -75,77 +156,211 @@ jobs:
         with:
           name: VoiceClone-android
           path: VoiceClone-android.apk
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: VoiceClone-android.apk
-          generate_release_notes: true
 
   # ---------------------------------------------------------------- Windows
   windows:
+    needs: shared
     runs-on: windows-latest
     env:
-      APP_ORG: ${{ vars.APP_ORG || 'com.example' }}
+      APP_ORG: ${{ vars.APP_ORG }}
       SERVER_URL: ${{ vars.SERVER_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.47.9'
+      - name: Validate app identifier
+        shell: bash
+        run: |
+          if [[ -z "$APP_ORG" || "$APP_ORG" == "com.example" ]]; then
+            echo "::error::Set the APP_ORG repository variable to your reverse-domain app ID (for example, com.yourname.voiceclone)."
+            exit 1
+          fi
       - name: Generate platform folder
-        run: flutter create --platforms=windows --project-name voice_clone --org "$env:APP_ORG" .
+        shell: pwsh
+        run: |
+          flutter create --platforms=windows --project-name voice_clone --org "$env:APP_ORG" .
+          $code = $LASTEXITCODE
+          Write-Host "EXIT CODE: $code"
+          if ($code -ne 0) { exit $code }
       - name: Set server URL
         shell: bash
         run: |
           if [ -n "$SERVER_URL" ]; then sed -i "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
-      - run: flutter pub get
-      - run: flutter build windows --release
-      - name: Zip
-        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath VoiceClone-windows.zip
+      - name: Download shared lockfile
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-pubspec-lock
+          path: .
+      - name: Verify locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter pub get --enforce-lockfile
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
+      - name: Build Windows release
+        shell: pwsh
+        run: |
+          flutter build windows --release
+          $code = $LASTEXITCODE
+          Write-Host "EXIT CODE: $code"
+          if ($code -ne 0) { exit $code }
+      - name: Verify executable and zip release
+        shell: pwsh
+        run: |
+          $exe = "build/windows/x64/runner/Release/voice_clone.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            Write-Error "Expected Windows executable was not produced: $exe"
+            exit 1
+          }
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "VoiceClone-windows.zip" -Force
+          if (-not (Test-Path -LiteralPath "VoiceClone-windows.zip" -PathType Leaf)) {
+            Write-Error "Windows archive was not produced"
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: VoiceClone-windows
           path: VoiceClone-windows.zip
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: VoiceClone-windows.zip
-          generate_release_notes: true
 
   # -------------------------------------------------------------------- iOS
-  # Unsigned IPA. Users install it with AltStore or Sideloadly using a free Apple ID.
   ios:
+    needs: shared
     runs-on: macos-latest
     env:
-      APP_ORG: ${{ vars.APP_ORG || 'com.example' }}
+      APP_ORG: ${{ vars.APP_ORG }}
       SERVER_URL: ${{ vars.SERVER_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.47.9'
+      - name: Validate app identifier
+        shell: bash
+        run: |
+          if [[ -z "$APP_ORG" || "$APP_ORG" == "com.example" ]]; then
+            echo "::error::Set the APP_ORG repository variable to your reverse-domain app ID (for example, com.yourname.voiceclone)."
+            exit 1
+          fi
       - name: Generate platform folder
         run: flutter create --platforms=ios --project-name voice_clone --org "$APP_ORG" .
-      - name: Patch iOS (permissions, server URL)
+      - name: Download shared lockfile
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-pubspec-lock
+          path: .
+      - name: Verify locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          flutter pub get --enforce-lockfile
+          code=$?
+          set -e
+          echo "EXIT CODE: $code"
+          if [[ "$code" -ne 0 ]]; then exit "$code"; fi
+      - name: Patch iOS (permissions, unsigned signing, server URL)
         run: |
           /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string Record a voice sample to clone" ios/Runner/Info.plist
+          cd ios && pod install && cd ..
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          projects = [
+              Path("ios/Runner.xcodeproj/project.pbxproj"),
+              Path("ios/Pods/Pods.xcodeproj/project.pbxproj"),
+          ]
+          settings = (
+              "\t\t\t\tCODE_SIGNING_ALLOWED = NO;\n"
+              "\t\t\t\tCODE_SIGNING_REQUIRED = NO;\n"
+              '\t\t\t\tCODE_SIGN_IDENTITY = "";\n'
+              '\t\t\t\tDEVELOPMENT_TEAM = "";\n'
+          )
+          for project in projects:
+              if not project.exists():
+                  continue
+              contents = project.read_text()
+              contents, count = re.subn(
+                  r"(buildSettings = \{\n)",
+                  lambda match: match.group(1) + settings,
+                  contents,
+              )
+              if count == 0:
+                  raise SystemExit(f"Could not find Xcode build settings in {project}")
+              project.write_text(contents)
+              print(f"Disabled code signing in {count} configurations: {project}")
+          PY
           if [ -n "$SERVER_URL" ]; then sed -i '' "s#http://10.0.2.2:8000#$SERVER_URL#" lib/main.dart; fi
-      - run: flutter pub get
-      - name: Build unsigned IPA
+      - name: Build unsigned iOS app and package IPA
+        shell: bash
         run: |
-          flutter build ios --release --no-codesign --build-number=${{ github.run_number }}
+          set -euo pipefail
+          set +e
+          flutter build ipa --release --no-codesign --build-number=${{ github.run_number }} -v 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
+          build_code=${PIPESTATUS[0]}
+          set -e
+          echo "EXIT CODE: $build_code"
+          if [[ "$build_code" -ne 0 ]]; then exit "$build_code"; fi
+
+          app="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+          test -d "$app" || {
+            echo "::error::Unsigned Runner.app was not found inside the Xcode archive"
+            exit 1
+          }
+          rm -rf Payload VoiceClone-ios-unsigned.ipa
           mkdir Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -r VoiceClone-ios-unsigned.ipa Payload
+          cp -R "$app" Payload/
+          /usr/bin/zip -r VoiceClone-ios-unsigned.ipa Payload
+          test -s VoiceClone-ios-unsigned.ipa
+      - name: Upload iOS build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceClone-ios-build-log
+          path: ${{ runner.temp }}/ios-build.log
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: VoiceClone-ios-unsigned
           path: VoiceClone-ios-unsigned.ipa
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+
+  # --------------------------------------------------------------- Release
+  release:
+    name: Publish successful platform builds
+    runs-on: ubuntu-latest
+    needs: [android, windows, ios]
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Download Android artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-android
+          path: release-files
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-windows
+          path: release-files
+      - name: Download unsigned iOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceClone-ios-unsigned
+          path: release-files
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: VoiceClone-ios-unsigned.ipa
+          tag_name: build-${{ github.run_number }}
+          name: "VoiceClone build #${{ github.run_number }}"
+          target_commitish: ${{ github.sha }}
+          prerelease: true
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release-files/VoiceClone-android.apk
+            release-files/VoiceClone-windows.zip
+            release-files/VoiceClone-ios-unsigned.ipa

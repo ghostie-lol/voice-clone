@@ -133,9 +133,9 @@ class _CloneTabState extends State<CloneTab> {
   bool recording = false, consent = false, busy = false;
 
   Future<void> pick() async {
-    final r = await FilePicker.platform.pickFiles(type: FileType.audio);
-    if (r?.files.single.path != null) {
-      setState(() => samplePath = r!.files.single.path);
+    final picked = await FilePicker.pickFiles(type: FileType.audio);
+    if (picked.isNotEmpty && picked.first.path != null) {
+      setState(() => samplePath = picked.first.path);
     }
   }
 
@@ -300,12 +300,13 @@ class _SpeakTabState extends State<SpeakTab> {
   Future<void> save() async {
     if (outPath == null) return;
     if (Platform.isAndroid || Platform.isIOS) {
-      await Share.shareXFiles([XFile(outPath!)]);
+      await SharePlus.instance.share(ShareParams(files: [XFile(outPath!)]));
     } else {
-      final dest = await FilePicker.platform
-          .saveFile(fileName: 'speech.wav', type: FileType.audio);
-      if (dest != null) {
-        await File(outPath!).copy(dest);
+      final saved = await FilePicker.saveFile(
+        fileName: 'speech.wav',
+        bytes: await File(outPath!).readAsBytes(),
+      );
+      if (saved != null) {
         widget.home.toast('Saved');
       }
     }
@@ -316,7 +317,7 @@ class _SpeakTabState extends State<SpeakTab> {
     final vs = widget.home.voices;
     return ListView(padding: const EdgeInsets.all(16), children: [
       DropdownButtonFormField<String>(
-        value: vs.any((v) => v.id == voiceId) ? voiceId : null,
+        initialValue: vs.any((v) => v.id == voiceId) ? voiceId : null,
         decoration: const InputDecoration(
             labelText: 'Voice', border: OutlineInputBorder()),
         items: [
@@ -326,7 +327,7 @@ class _SpeakTabState extends State<SpeakTab> {
       ),
       const SizedBox(height: 12),
       DropdownButtonFormField<String>(
-        value: lang,
+        initialValue: lang,
         decoration: const InputDecoration(
             labelText: 'Language', border: OutlineInputBorder()),
         items: [
