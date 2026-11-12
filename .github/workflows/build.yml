@@ -1,6 +1,7 @@
 name: Build and release
 
 # Push a tag like v1.0.0 to build everything and publish APK, EXE and IPA to GitHub Releases.
+# The release is created once, by a final job that waits for all three builds to finish.
 # Run manually (Actions tab) to build without releasing.
 on:
   push:
@@ -9,6 +10,11 @@ on:
 
 permissions:
   contents: write
+
+# Runs go one at a time: a new run waits for the previous one to finish instead of overlapping or cancelling it.
+concurrency:
+  group: build-and-release
+  cancel-in-progress: false
 
 jobs:
   # ---------------------------------------------------------------- Android
@@ -75,12 +81,6 @@ jobs:
         with:
           name: VoiceClone-android
           path: VoiceClone-android.apk
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: VoiceClone-android.apk
-          generate_release_notes: true
 
   # ---------------------------------------------------------------- Windows
   windows:
@@ -107,12 +107,6 @@ jobs:
         with:
           name: VoiceClone-windows
           path: VoiceClone-windows.zip
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: VoiceClone-windows.zip
-          generate_release_notes: true
 
   # -------------------------------------------------------------------- iOS
   # Unsigned IPA. Users install it with AltStore or Sideloadly using a free Apple ID.
@@ -143,9 +137,25 @@ jobs:
         with:
           name: VoiceClone-ios-unsigned
           path: VoiceClone-ios-unsigned.ipa
-      - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+
+  # ---------------------------------------------------------------- Release
+  # Runs only after Android, Windows and iOS have all finished successfully, then publishes the release once.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android, windows, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: List files
+        run: ls -la dist
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: VoiceClone-ios-unsigned.ipa
+          files: |
+            dist/VoiceClone-android.apk
+            dist/VoiceClone-windows.zip
+            dist/VoiceClone-ios-unsigned.ipa
           generate_release_notes: true
